@@ -8,7 +8,6 @@ use cargo_platform::Platform;
 use docopt::Docopt;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
-use url::Url;
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs::{self, File};
@@ -16,6 +15,7 @@ use std::io;
 use std::io::prelude::*;
 use std::path::{self, Path, PathBuf};
 use tar::{Builder, Header};
+use url::Url;
 
 #[derive(Deserialize)]
 struct Options {
@@ -27,6 +27,7 @@ struct Options {
     flag_quiet: Option<bool>,
     flag_color: Option<String>,
     flag_git: bool,
+    flag_path: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -48,13 +49,13 @@ struct RegistryDependency {
     default_features: bool,
     target: Option<String>,
     kind: Option<String>,
-    package: Option<String>
+    package: Option<String>,
 }
 
 fn main() {
     env_logger::init();
 
-    // We're doing the vendoring operation outselves, so we don't actually want
+    // We're doing the vendoring operation ourselves, so we don't actually want
     // to respect any of the `source` configuration in Cargo itself. That's
     // intended for other consumers of Cargo, but we want to go straight to the
     // source, e.g. crates.io, to fetch crates.
