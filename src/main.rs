@@ -1,4 +1,4 @@
-use cargo::core::dependency::Kind;
+use cargo::core::dependency::DepKind;
 use cargo::core::resolver::Resolve;
 use cargo::core::{Package, SourceId, Workspace};
 use cargo::sources::PathSource;
@@ -6,10 +6,12 @@ use cargo::util::errors::*;
 use cargo::util::Config;
 use cargo_platform::Platform;
 use docopt::Docopt;
+use failure::ResultExt;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::env;
+use std::fmt::format;
 use std::fs::{self, File};
 use std::io;
 use std::io::prelude::*;
@@ -24,10 +26,9 @@ struct Options {
     flag_sync: Option<String>,
     flag_host: Option<String>,
     flag_verbose: u32,
-    flag_quiet: Option<bool>,
+    flag_quiet: bool,
     flag_color: Option<String>,
     flag_git: bool,
-    flag_path: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -98,19 +99,20 @@ fn real_main(options: Options, config: &mut Config) -> CargoResult<()> {
     config.configure(
         options.flag_verbose,
         options.flag_quiet,
-        &options.flag_color,
+        options.flag_color.as_deref(),
         /* frozen = */ false,
         /* locked = */ false,
         /* offline = */ false,
         /* target dir = */ &None,
         /* unstable flags = */ &[],
+        &[],
     )?;
 
     let path = Path::new(&options.arg_path);
     let index = path.join("index");
 
-    fs::create_dir_all(&index)
-        .chain_err(|| format!("failed to create index: `{}`", index.display()))?;
+    fs::create_dir_all(&index)?;
+    //    .with_context(|e| format!("failed to create index: `{}`", index.display()))?;
     let id = match options.flag_host {
         Some(ref s) => SourceId::for_registry(&Url::parse(s)?)?,
         None => SourceId::crates_io(config)?,
@@ -121,7 +123,9 @@ fn real_main(options: Options, config: &mut Config) -> CargoResult<()> {
         None => return Ok(()),
     };
 
-    sync(Path::new(lockfile), &path, &id, &options, config).chain_err(|| "failed to sync")?;
+    sync(Path::new(lockfile), &path, &id, &options, config)?;
+    // .map_err(|e| format!("failed to sync: `{}`", e))
+    // .into()?;
 
     println!(
         "add this to your .cargo/config somewhere:
@@ -153,8 +157,7 @@ fn sync(
     let manifest = lockfile.parent().unwrap().join("Cargo.toml");
     let manifest = env::current_dir().unwrap().join(&manifest);
     let ws = Workspace::new(&manifest, config)?;
-    let (packages, resolve) =
-        cargo::ops::resolve_ws(&ws).chain_err(|| "failed to load pkg lockfile")?;
+    let (packages, resolve) = cargo::ops::resolve_ws(&ws)?; // .chain_err(|| "failed to load pkg lockfile")?;
     packages.get_many(resolve.iter())?;
     let hash = cargo::util::hex::short_hash(registry_id);
     let ident = registry_id.url().host().unwrap().to_string();
@@ -173,16 +176,15 @@ fn sync(
             continue;
         }
 
-        let pkg = packages
-            .get_one(id)
-            .chain_err(|| "failed to fetch package")?;
+        let pkg = packages.get_one(id)?;
+        //.chain_err(|| "failed to fetch package")?;
         let filename = format!("{}-{}.crate", id.name(), id.version());
         let dst = canonical_local_dst.join(&filename);
         if id.source_id().is_registry() {
             let src = cache.join(&filename).into_path_unlocked();
-            fs::copy(&src, &dst).chain_err(|| {
-                format!("failed to copy `{}` to `{}`", src.display(), dst.display())
-            })?;
+            fs::copy(&src, &dst)?; //.chain_err(|| {
+                                   //     format!("failed to copy `{}` to `{}`", src.display(), dst.display())
+                                   // })?;
         } else {
             let file = File::create(&dst).unwrap();
             let gz = GzEncoder::new(file, flate2::Compression::best());
@@ -317,9 +319,9 @@ fn registry_pkg(pkg: &Package, resolve: &Resolve) -> RegistryPackage {
                     Platform::Cfg(ref s) => format!("cfg({})", s),
                 }),
                 kind: match dep.kind() {
-                    Kind::Normal => None,
-                    Kind::Development => Some("dev".to_string()),
-                    Kind::Build => Some("build".to_string()),
+                    DepKind::Normal => None,
+                    DepKind::Development => Some("dev".to_string()),
+                    DepKind::Build => Some("build".to_string()),
                 },
                 package,
             }
@@ -332,10 +334,7 @@ fn registry_pkg(pkg: &Package, resolve: &Resolve) -> RegistryPackage {
         .features()
         .into_iter()
         .map(|(k, v)| {
-            let mut v = v
-                .iter()
-                .map(|x| x.to_string(pkg.summary()))
-                .collect::<Vec<_>>();
+            let mut v = v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
             v.sort();
             (k.to_string(), v)
         })
@@ -362,7 +361,7 @@ fn read(path: &Path) -> CargoResult<String> {
         let mut f = File::open(path)?;
         f.read_to_string(&mut contents)?;
         Ok(contents)
-    })()
-    .chain_err(|| format!("failed to read: {}", path.display()))?;
+    })()?;
+    // .chain_err(|| format!("failed to read: {}", path.display()))?;
     Ok(s)
 }
